@@ -524,7 +524,13 @@ int sio_link_enable(LINK_ROLE role)
 
 void sio_link_disable(void)
 {
-  sio_link_enabled = 0;                         /* hooks go quiet first */
+  {
+    extern char main_path[];
+    char path[512];
+    snprintf(path, sizeof(path), "%slink_trace.txt", main_path);
+    sio_link_enabled = 0;                       /* hooks go quiet first */
+    sio_trace_flush(path);
+  }
   link_stop();
   sio_link_ctx_reset(&sio_ctx);
 }
@@ -595,6 +601,57 @@ void sio_link_debug_text(char *buf, int n, int line)
                (unsigned)c->dbg_slave_res, (unsigned)c->dbg_slave_nak);
       break;
   }
+}
+
+#define SIO_TRACE_MAX 4096
+
+typedef struct { uint32_t t, pc, addr, val; uint8_t kind; } sio_trace_ev;
+
+static sio_trace_ev sio_trace_buf[SIO_TRACE_MAX];
+static unsigned sio_trace_n;
+
+void sio_trace(int kind, uint32_t addr, uint32_t val, uint32_t pc)
+{
+  sio_trace_ev *e;
+
+  if (!sio_link_enabled)
+    return;
+
+  e = &sio_trace_buf[sio_trace_n % SIO_TRACE_MAX];
+  sio_trace_n++;
+  e->t = link_now_us();
+  e->pc = pc;
+  e->addr = addr & 0x3FF;
+  e->val = val;
+  e->kind = (uint8_t)kind;
+}
+
+void sio_trace_flush(const char *path)
+{
+  static const char *names[] = { "r8 ", "r16", "r32", "w16", "w32", "evt" };
+  FILE *f;
+  unsigned i, start, count;
+
+  if (sio_trace_n == 0)
+    return;
+
+  f = fopen(path, "w");
+  if (f == NULL)
+    return;
+
+  count = (sio_trace_n < SIO_TRACE_MAX) ? sio_trace_n : SIO_TRACE_MAX;
+  start = sio_trace_n - count;
+
+  fprintf(f, "# total events %u, showing last %u (us since boot, pc, access)\n",
+          sio_trace_n, count);
+  for (i = 0; i < count; i++)
+  {
+    const sio_trace_ev *e = &sio_trace_buf[(start + i) % SIO_TRACE_MAX];
+    fprintf(f, "%u pc=%08X %s %03X = %08X\n", (unsigned)e->t, (unsigned)e->pc,
+            names[e->kind > 5 ? 5 : e->kind], (unsigned)e->addr, (unsigned)e->val);
+  }
+  fclose(f);
+  sio_trace_n = 0;
 }
 
 int sio_link_mp_control(uint16_t *value)

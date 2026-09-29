@@ -685,8 +685,15 @@ static u32 read32_iwram(u32 address)
 }
 */
 
+#define SIO_TRACE_ADDR(a) (((((a) & 0x3FF) >= 0x120) && (((a) & 0x3FF) < 0x136)) || \
+                           ((((a) & 0x3FF) >= 0x10C) && (((a) & 0x3FF) < 0x110)) || \
+                           (((a) & 0x3FF) == 0x200))
+
 static u32 read8_io_registers(u32 address)
 {
+  if (sio_link_enabled && SIO_TRACE_ADDR(address))
+    sio_trace(0, address, 0, reg[REG_PC]);
+
   if ((address & 0xFFFC) == 0x0800) // repeated each 64K
     return ADDRESS8(&iwram_control, address & 0x03);
 
@@ -698,6 +705,9 @@ static u32 read8_io_registers(u32 address)
 
 static u32 read16_io_registers(u32 address)
 {
+  if (sio_link_enabled && SIO_TRACE_ADDR(address))
+    sio_trace(1, address, 0, reg[REG_PC]);
+
   if ((address & 0x3FE) == 0x128)
     sio_dbg_siocnt_reads++;
 
@@ -717,6 +727,9 @@ static u32 read16_io_registers(u32 address)
 
 static u32 read32_io_registers(u32 address)
 {
+  if (sio_link_enabled && SIO_TRACE_ADDR(address))
+    sio_trace(2, address, 0, reg[REG_PC]);
+
   if ((address & 0xFFFC) == 0x0800)
     return iwram_control;
 
@@ -1494,6 +1507,9 @@ CPU_ALERT_TYPE write_io_register8(u32 address, u32 value)
 
 CPU_ALERT_TYPE write_io_register16(u32 address, u32 value)
 {
+  if (sio_link_enabled && SIO_TRACE_ADDR(address))
+    sio_trace(3, address, value, reg[REG_PC]);
+
   switch (address)
   {
     // DISPCNT
@@ -1816,6 +1832,9 @@ CPU_ALERT_TYPE write_io_register16(u32 address, u32 value)
 
 CPU_ALERT_TYPE write_io_register32(u32 address, u32 value)
 {
+  if (sio_link_enabled && SIO_TRACE_ADDR(address))
+    sio_trace(4, address, value, reg[REG_PC]);
+
   switch (address)
   {
     // BG2 reference X

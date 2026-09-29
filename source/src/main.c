@@ -404,7 +404,10 @@ u32 update_gba(void)
         if (sio_link_enabled != 0)
         {
           if (sio_link_poll() != 0)
+          {
             irq_raised |= IRQ_SERIAL;
+            sio_trace(5, 0, 0x5E, 0);
+          }
         }
 
         vcount++;

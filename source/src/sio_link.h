@@ -127,6 +127,13 @@ void     sio_link_disable(void);            /* hook down + link_stop    */
 void     sio_link_reset(void);              /* emulator reset: drop pending */
 
 int      sio_link_start(uint16_t value, int is32);
+
+/* Register-access trace (production only). Records SIO / TM3 / IE accesses in
+ * a ring buffer while the link is enabled and writes link_trace.txt to the
+ * application folder on disconnect / quit. kind: 0 r8 1 r16 2 r32 3 w16 4 w32
+ * 5 event marker. */
+void     sio_trace(int kind, uint32_t addr, uint32_t val, uint32_t pc);
+void     sio_trace_flush(const char *path);
 /* Record every SIOCNT write (any mode) for the diagnostics line. */
 void     sio_link_note_write(uint16_t value, uint16_t rcnt);
 void     sio_link_debug_text(char *buf, int n, int line);   /* line 0..5 */
