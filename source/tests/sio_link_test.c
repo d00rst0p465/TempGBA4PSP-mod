@@ -51,6 +51,7 @@ struct node
 
 static int n_connected(void *u)  { return ((node *)u)->connected; }
 static int n_peer_count(void *u) { return ((node *)u)->peers; }
+static int n_local_slot(void *u) { return ((node *)u)->slot; }
 static uint32_t n_now(void *u)   { return *((node *)u)->clock; }
 
 static int n_send(void *u, uint8_t dest, uint8_t type, const void *data, uint8_t len)
@@ -122,6 +123,7 @@ static void unit_init(unit *u, int slot)
   u->net.clock     = &g_clock;
   u->ops.connected  = n_connected;
   u->ops.peer_count = n_peer_count;
+  u->ops.local_slot = n_local_slot;
   u->ops.send       = n_send;
   u->ops.recv       = n_recv;
   u->ops.now_us     = n_now;
@@ -399,6 +401,177 @@ static void test_many_transfers(void)
   CHECK(a.net.sent_count == 100 && b.net.sent_count == 100, "one request + one reply each");
 }
 
+/* ---------------- multiplayer ---------------- */
+
+#define MP_MODE  (0x2000 | 0x0003)          /* multiplayer, 115200 baud */
+#define MP_IRQ   (MP_MODE | 0x4000)
+
+/* What sio_control() does for MULTIPLAYER mode. */
+static void game_writes_mp(unit *u, uint16_t value)
+{
+  uint16_t v = value;
+  if (sio_link_ctx_mp_control(&u->ctx, &v) == 0)
+  {
+    v &= 0xFF83;
+    v |= 0x0C;
+  }
+  u->io[SIO_REG_SIOCNT] = v;
+}
+
+static void mp_enter(unit *u, uint16_t cnt)
+{
+  u->io[SIO_REG_RCNT] = 0;
+  game_writes_mp(u, cnt);
+}
+
+static uint16_t multi(const unit *u, int i)
+{
+  return u->io[SIO_REG_DATA32_LO + (i == 0 ? 0 : i)];
+}
+
+static void test_mp_link_off_is_stub(void)
+{
+  unit a, b;
+  printf("multiplayer: link off keeps the original stub\n");
+  pair(&a, &b);
+  a.net.connected = 0;
+  mp_enter(&a, MP_IRQ | 0x80);
+  CHECK((a.io[SIO_REG_SIOCNT] & 0x7C) == 0x0C, "stub SD|SI, got %04x", a.io[SIO_REG_SIOCNT]);
+  CHECK(a.net.sent_count == 0, "nothing sent");
+}
+
+static void test_mp_two_player_exchange(void)
+{
+  unit a, b;
+  uint16_t irq_a, irq_b;
+  printf("multiplayer: master/slave exchange, IDs, IRQs\n");
+  pair(&a, &b);
+
+  mp_enter(&a, MP_IRQ);
+  mp_enter(&b, MP_IRQ);
+  CHECK((a.io[SIO_REG_SIOCNT] & 0x3C) == 0x04, "master SD, SI=0, ID0: %04x", a.io[SIO_REG_SIOCNT]);
+  CHECK((b.io[SIO_REG_SIOCNT] & 0x3C) == 0x1C, "slave SD|SI, ID1: %04x", b.io[SIO_REG_SIOCNT]);
+
+  a.io[SIO_REG_DATA8] = 0x1111;
+  b.io[SIO_REG_DATA8] = 0x2222;
+
+  game_writes_mp(&b, MP_IRQ | 0x80);            /* slave start bit is ignored */
+  CHECK((b.io[SIO_REG_SIOCNT] & 0x80) == 0, "slave cannot start");
+  CHECK(b.net.sent_count == 0, "slave sent nothing");
+
+  game_writes_mp(&a, MP_IRQ | 0x80);
+  CHECK((a.io[SIO_REG_SIOCNT] & 0x80) != 0, "master busy");
+
+  irq_b = sio_link_ctx_poll(&b.ctx);            /* request -> slave replies */
+  CHECK(irq_b == 0, "slave no IRQ yet");
+  CHECK((b.io[SIO_REG_SIOCNT] & 0x80) != 0, "slave busy during transfer");
+  irq_a = sio_link_ctx_poll(&a.ctx);            /* reply -> master finishes */
+  CHECK(irq_a == SIO_IRQ_SERIAL, "master IRQ");
+  CHECK((a.io[SIO_REG_SIOCNT] & 0x80) == 0, "master idle");
+  CHECK(multi(&a, 0) == 0x1111 && multi(&a, 1) == 0x2222, "master data %04x %04x", multi(&a, 0), multi(&a, 1));
+  CHECK(multi(&a, 2) == 0xFFFF && multi(&a, 3) == 0xFFFF, "absent slots read FFFF");
+
+  irq_b = sio_link_ctx_poll(&b.ctx);            /* result -> slave finishes */
+  CHECK(irq_b == SIO_IRQ_SERIAL, "slave IRQ");
+  CHECK((b.io[SIO_REG_SIOCNT] & 0x80) == 0, "slave idle");
+  CHECK(multi(&b, 0) == 0x1111 && multi(&b, 1) == 0x2222 &&
+        multi(&b, 2) == 0xFFFF && multi(&b, 3) == 0xFFFF, "slave data");
+}
+
+static void test_mp_slave_not_in_mp_mode(void)
+{
+  unit a, b;
+  printf("multiplayer: slave not in multiplayer mode reads FFFF\n");
+  pair(&a, &b);
+  mp_enter(&a, MP_IRQ);
+  b.io[SIO_REG_SIOCNT] = 0x0000;                /* still menu / other mode */
+  a.io[SIO_REG_DATA8] = 0x1234;
+  game_writes_mp(&a, MP_IRQ | 0x80);
+  sio_link_ctx_poll(&b.ctx);
+  CHECK(sio_link_ctx_poll(&a.ctx) == SIO_IRQ_SERIAL, "master completes on NAK");
+  CHECK(multi(&a, 0) == 0x1234 && multi(&a, 1) == 0xFFFF, "slave slot absent");
+  CHECK((b.io[SIO_REG_SIOCNT] & 0x80) == 0, "NAKing slave never busy");
+}
+
+static void test_mp_timeout_missing_slave(void)
+{
+  unit a, b;
+  printf("multiplayer: silent slave -> timeout, others still delivered\n");
+  pair(&a, &b);
+  a.net.peers = 2;                              /* expect slot 1 and slot 2 */
+  mp_enter(&a, MP_IRQ);
+  mp_enter(&b, MP_IRQ);
+  a.io[SIO_REG_DATA8] = 0xAAAA;
+  b.io[SIO_REG_DATA8] = 0xBBBB;
+  game_writes_mp(&a, MP_IRQ | 0x80);
+  sio_link_ctx_poll(&b.ctx);
+  CHECK(sio_link_ctx_poll(&a.ctx) == 0, "still waiting for slot 2");
+  CHECK((a.io[SIO_REG_SIOCNT] & 0x80) != 0, "master still busy");
+  g_clock += SIO_MP_TIMEOUT_US + 1;
+  CHECK(sio_link_ctx_poll(&a.ctx) == SIO_IRQ_SERIAL, "timeout completes");
+  CHECK(multi(&a, 1) == 0xBBBB && multi(&a, 2) == 0xFFFF, "slot1 ok slot2 absent");
+  CHECK(sio_link_ctx_poll(&b.ctx) == SIO_IRQ_SERIAL, "slave gets result");
+  CHECK(multi(&b, 0) == 0xAAAA && multi(&b, 1) == 0xBBBB, "slave data");
+}
+
+static void test_mp_slave_busy_timeout(void)
+{
+  unit a, b;
+  printf("multiplayer: slave gives up if the result never arrives\n");
+  pair(&a, &b);
+  mp_enter(&a, MP_IRQ);
+  mp_enter(&b, MP_IRQ);
+  game_writes_mp(&a, MP_IRQ | 0x80);
+  sio_link_ctx_poll(&b.ctx);
+  CHECK((b.io[SIO_REG_SIOCNT] & 0x80) != 0, "slave busy");
+  b.net.qn = 0;
+  g_clock += SIO_MP_SLAVE_TIMEOUT_US + 1;
+  sio_link_ctx_poll(&b.ctx);
+  CHECK((b.io[SIO_REG_SIOCNT] & 0x80) == 0, "slave busy cleared");
+}
+
+static void test_mp_latency_and_many(void)
+{
+  unit a, b;
+  int i, ok = 1;
+  printf("multiplayer: 100 transfers with 4 ms one-way latency\n");
+  pair(&a, &b);
+  a.net.latency_us = b.net.latency_us = 4000;
+  mp_enter(&a, MP_IRQ);
+  mp_enter(&b, MP_IRQ);
+
+  for (i = 0; i < 100; i++)
+  {
+    int t;
+    a.io[SIO_REG_DATA8] = (uint16_t)(0x1000 + i);
+    b.io[SIO_REG_DATA8] = (uint16_t)(0x2000 + i);
+    game_writes_mp(&a, MP_IRQ | 0x80);
+    for (t = 0; t < 40; t++)
+    {
+      g_clock += 500;
+      sio_link_ctx_poll(&b.ctx);
+      sio_link_ctx_poll(&a.ctx);
+    }
+    if (multi(&a, 0) != 0x1000 + i || multi(&a, 1) != 0x2000 + i ||
+        multi(&b, 0) != 0x1000 + i || multi(&b, 1) != 0x2000 + i ||
+        (a.io[SIO_REG_SIOCNT] & 0x80) || (b.io[SIO_REG_SIOCNT] & 0x80))
+      ok = 0;
+  }
+  CHECK(ok, "all transfers correct");
+}
+
+static void test_mp_send_failure_falls_back(void)
+{
+  unit a, b;
+  printf("multiplayer: send failure falls back to the stub\n");
+  pair(&a, &b);
+  mp_enter(&a, MP_IRQ);
+  a.net.fail_send = 1;
+  game_writes_mp(&a, MP_IRQ | 0x80);
+  CHECK((a.io[SIO_REG_SIOCNT] & 0x7C) == 0x0C, "stub status");
+  CHECK(a.ctx.mp_pending == 0, "no transfer pending");
+}
+
 int main(void)
 {
   test_link_off_is_unchanged();
@@ -412,6 +585,13 @@ int main(void)
   test_second_start_while_pending();
   test_send_failure_falls_back();
   test_many_transfers();
+  test_mp_link_off_is_stub();
+  test_mp_two_player_exchange();
+  test_mp_slave_not_in_mp_mode();
+  test_mp_timeout_missing_slave();
+  test_mp_slave_busy_timeout();
+  test_mp_latency_and_many();
+  test_mp_send_failure_falls_back();
 
   printf("\n%d checks, %d failed\n", g_checks, g_failed);
   return g_failed ? 1 : 0;

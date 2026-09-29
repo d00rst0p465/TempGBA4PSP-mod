@@ -1137,9 +1137,22 @@ static CPU_ALERT_TYPE sio_control(u32 value)
       break;
 
     case MULTIPLAYER:
-      value &= 0xFF83;
-      value |= 0x0C;
+    {
+      // With a live link the status bits, ID and busy bit come from the
+      // link layer (master = player 1). Otherwise the original stub.
+      u16 mp_value = (u16)value;
+
+      if (sio_link_mp_control(&mp_value) != 0)
+      {
+        value = mp_value;
+      }
+      else
+      {
+        value &= 0xFF83;
+        value |= 0x0C;
+      }
       break;
+    }
 
     case UART:
     case JOYBUS:

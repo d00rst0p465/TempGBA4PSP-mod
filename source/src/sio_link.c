@@ -28,6 +28,20 @@
 #define SIO_FLAG_32BIT    (0x01)
 #define SIO_FLAG_NAK      (0x02)
 
+/* Multiplayer messages (12 bytes): [0] kind, [1] flags (bit1 = NAK: not in
+ * multiplayer mode), [2..3] seq, [4..11] four little endian words.
+ *   MREQ master -> all   word0 = master's SIOMLT_SEND
+ *   MRSP slave -> master word0 = slave's SIOMLT_SEND
+ *   MRES master -> all   words = SIOMULTI0..3 (0xFFFF = absent) */
+#define SIO_KIND_MREQ     (3)
+#define SIO_KIND_MRSP     (4)
+#define SIO_KIND_MRES     (5)
+#define SIO_MP_PAYLOAD_LEN (12)
+
+#define SIOCNT_MODE_MASK  (0x3000)
+#define SIOCNT_MODE_MULTI (0x2000)
+#define SIOCNT_MP_STATUS  (0x007C)      /* SD, SI, ID, error */
+
 #define SIO_PAYLOAD_LEN   (8)
 #define SIO_MAX_MSGS_PER_POLL (16)
 
@@ -97,6 +111,8 @@ void sio_link_ctx_reset(sio_link_ctx *c)
 {
   c->pending = 0;
   c->pending_deadline_us = 0;
+  c->mp_pending = 0;
+  c->mp_slave_busy = 0;
 }
 
 
@@ -188,6 +204,228 @@ static uint16_t handle_response(sio_link_ctx *c, const link_msg *m)
 }
 
 
+
+/* ------------------------------------------------------------------------ */
+/* Multiplayer mode                                                         */
+/* ------------------------------------------------------------------------ */
+
+static int in_mp_mode(const sio_link_ctx *c)
+{
+  return (c->io[SIO_REG_RCNT] & 0x8000) == 0 &&
+         (c->io[SIO_REG_SIOCNT] & SIOCNT_MODE_MASK) == SIOCNT_MODE_MULTI;
+}
+
+/* Read-only bits: SD (bit2) = all units ready, SI (bit3) = 1 on slaves,
+ * ID (bits 4-5) = player number. */
+static uint16_t mp_status_bits(int slot)
+{
+  return (uint16_t)(0x0004 | (slot != 0 ? 0x0008 : 0) | ((slot & 3) << 4));
+}
+
+static void mp_put_words(uint8_t *p, const uint16_t *w)
+{
+  int i;
+  for (i = 0; i < 4; i++)
+  {
+    p[i * 2]     = (uint8_t)(w[i]);
+    p[i * 2 + 1] = (uint8_t)(w[i] >> 8);
+  }
+}
+
+static void mp_store_result(sio_link_ctx *c, const uint16_t *w, int slot)
+{
+  uint16_t cnt;
+
+  c->io[SIO_REG_DATA32_LO]     = w[0];
+  c->io[SIO_REG_DATA32_HI]     = w[1];
+  c->io[SIO_REG_DATA32_HI + 1] = w[2];
+  c->io[SIO_REG_DATA32_HI + 2] = w[3];
+
+  cnt = c->io[SIO_REG_SIOCNT];
+  cnt &= (uint16_t)~(SIOCNT_START | SIOCNT_MP_STATUS);
+  cnt |= mp_status_bits(slot);
+  c->io[SIO_REG_SIOCNT] = cnt;
+}
+
+static uint16_t mp_irq(const sio_link_ctx *c)
+{
+  return (c->io[SIO_REG_SIOCNT] & SIOCNT_IRQ_ENABLE) ? SIO_IRQ_SERIAL : 0;
+}
+
+/* Master: all replies in (or timed out) -> publish the result to everyone. */
+static uint16_t mp_master_finish(sio_link_ctx *c)
+{
+  const sio_link_ops *o = c->ops;
+  uint8_t payload[SIO_MP_PAYLOAD_LEN];
+
+  c->mp_pending = 0;
+
+  payload[0] = SIO_KIND_MRES;
+  payload[1] = 0;
+  payload[2] = (uint8_t)c->mp_seq;
+  payload[3] = (uint8_t)(c->mp_seq >> 8);
+  mp_put_words(&payload[4], c->mp_words);
+  o->send(o->user, LINK_SLOT_BROADCAST, LINK_MSG_SIO, payload, SIO_MP_PAYLOAD_LEN);
+
+  mp_store_result(c, c->mp_words, 0);
+  return mp_irq(c);
+}
+
+int sio_link_ctx_mp_control(sio_link_ctx *c, uint16_t *value)
+{
+  const sio_link_ops *o = c->ops;
+  uint16_t v = *value;
+  int slot = o->local_slot(o->user);
+  int i, busy;
+
+  if (!o->connected(o->user) || o->peer_count(o->user) < 1 ||
+      slot < 0 || slot > 3)
+    return 0;                                   /* original stub */
+
+  if (slot == 0)
+  {
+    if ((v & SIOCNT_START) != 0 && !c->mp_pending)
+    {
+      uint8_t payload[SIO_MP_PAYLOAD_LEN];
+      int peers = o->peer_count(o->user);
+
+      memset(payload, 0, sizeof(payload));
+      payload[0] = SIO_KIND_MREQ;
+      payload[2] = (uint8_t)c->mp_next_seq;
+      payload[3] = (uint8_t)(c->mp_next_seq >> 8);
+      payload[4] = (uint8_t)(c->io[SIO_REG_DATA8]);
+      payload[5] = (uint8_t)(c->io[SIO_REG_DATA8] >> 8);
+
+      if (o->send(o->user, LINK_SLOT_BROADCAST, LINK_MSG_SIO,
+                  payload, SIO_MP_PAYLOAD_LEN) < 0)
+        return 0;
+
+      for (i = 0; i < 4; i++)
+        c->mp_words[i] = 0xFFFF;
+      c->mp_words[0]    = c->io[SIO_REG_DATA8];
+      c->mp_expected    = (uint8_t)(((1 << (peers + 1)) - 1) & 0x0E);
+      c->mp_got         = 0;
+      c->mp_seq         = c->mp_next_seq++;
+      c->mp_pending     = 1;
+      c->mp_deadline_us = o->now_us(o->user) + SIO_MP_TIMEOUT_US;
+    }
+    busy = c->mp_pending;
+  }
+  else
+  {
+    busy = c->mp_slave_busy;                    /* start bit is read-only */
+  }
+
+  v &= (uint16_t)~(SIOCNT_START | SIOCNT_MP_STATUS);
+  v |= mp_status_bits(slot);
+  if (busy)
+    v |= SIOCNT_START;
+
+  *value = v;
+  return 1;
+}
+
+static uint16_t mp_handle_request(sio_link_ctx *c, const link_msg *m)
+{
+  const sio_link_ops *o = c->ops;
+  int slot = o->local_slot(o->user);
+  uint8_t reply[SIO_MP_PAYLOAD_LEN];
+  uint8_t dest;
+
+  if (slot <= 0)
+    return 0;                                   /* masters ignore requests */
+
+  memset(reply, 0, sizeof(reply));
+  reply[0] = SIO_KIND_MRSP;
+  reply[2] = m->data[2];
+  reply[3] = m->data[3];
+
+  if (in_mp_mode(c))
+  {
+    reply[4] = (uint8_t)(c->io[SIO_REG_DATA8]);
+    reply[5] = (uint8_t)(c->io[SIO_REG_DATA8] >> 8);
+    c->mp_slave_busy = 1;
+    c->mp_slave_deadline_us = o->now_us(o->user) + SIO_MP_SLAVE_TIMEOUT_US;
+    c->io[SIO_REG_SIOCNT] |= SIOCNT_START;
+  }
+  else
+  {
+    reply[1] = SIO_FLAG_NAK;
+  }
+
+  dest = (m->src_slot == LINK_SLOT_NONE) ? (uint8_t)LINK_SLOT_BROADCAST
+                                         : (uint8_t)m->src_slot;
+  o->send(o->user, dest, LINK_MSG_SIO, reply, SIO_MP_PAYLOAD_LEN);
+  return 0;
+}
+
+static uint16_t mp_handle_response(sio_link_ctx *c, const link_msg *m)
+{
+  int src = m->src_slot;
+  uint16_t seq = (uint16_t)(m->data[2] | (m->data[3] << 8));
+
+  if (!c->mp_pending || seq != c->mp_seq || src < 1 || src > 3)
+    return 0;
+
+  if (!(m->data[1] & SIO_FLAG_NAK))
+    c->mp_words[src] = (uint16_t)(m->data[4] | (m->data[5] << 8));
+
+  c->mp_got |= (uint8_t)(1 << src);
+
+  if ((c->mp_got & c->mp_expected) == c->mp_expected)
+    return mp_master_finish(c);
+
+  return 0;
+}
+
+static uint16_t mp_handle_result(sio_link_ctx *c, const link_msg *m)
+{
+  int slot = c->ops->local_slot(c->ops->user);
+  uint16_t w[4];
+  int i;
+
+  if (slot <= 0 || !in_mp_mode(c))
+    return 0;
+
+  for (i = 0; i < 4; i++)
+    w[i] = (uint16_t)(m->data[4 + i * 2] | (m->data[5 + i * 2] << 8));
+
+  c->mp_slave_busy = 0;
+  mp_store_result(c, w, slot);
+  return mp_irq(c);
+}
+
+static uint16_t mp_tick(sio_link_ctx *c)
+{
+  const sio_link_ops *o = c->ops;
+  uint16_t irq = 0;
+  int slot;
+
+  if (c->mp_pending &&
+      (int32_t)(o->now_us(o->user) - c->mp_deadline_us) >= 0)
+    irq |= mp_master_finish(c);                 /* missing slaves read 0xFFFF */
+
+  if (c->mp_slave_busy &&
+      (int32_t)(o->now_us(o->user) - c->mp_slave_deadline_us) >= 0)
+  {
+    c->mp_slave_busy = 0;
+    c->io[SIO_REG_SIOCNT] &= (uint16_t)~SIOCNT_START;
+  }
+
+  /* keep SD/SI/ID current as peers come and go */
+  if (in_mp_mode(c) && o->connected(o->user) && o->peer_count(o->user) >= 1)
+  {
+    slot = o->local_slot(o->user);
+    if (slot >= 0 && slot <= 3)
+    {
+      c->io[SIO_REG_SIOCNT] = (uint16_t)((c->io[SIO_REG_SIOCNT] &
+                              ~0x003C) | mp_status_bits(slot));
+    }
+  }
+
+  return irq;
+}
+
 uint16_t sio_link_ctx_poll(sio_link_ctx *c)
 {
   const sio_link_ops *o = c->ops;
@@ -204,7 +442,15 @@ uint16_t sio_link_ctx_poll(sio_link_ctx *c)
       irq |= handle_request(c, &m);
     else if (m.data[0] == SIO_KIND_RSP)
       irq |= handle_response(c, &m);
+    else if (m.data[0] == SIO_KIND_MREQ)
+      irq |= mp_handle_request(c, &m);
+    else if (m.data[0] == SIO_KIND_MRSP)
+      irq |= mp_handle_response(c, &m);
+    else if (m.data[0] == SIO_KIND_MRES)
+      irq |= mp_handle_result(c, &m);
   }
+
+  irq |= mp_tick(c);
 
   if (c->pending &&
       (int32_t)(o->now_us(o->user) - c->pending_deadline_us) >= 0)
@@ -233,6 +479,7 @@ static sio_link_ctx sio_ctx;
 
 static int prod_connected(void *u)  { (void)u; return link_is_connected(); }
 static int prod_peer_count(void *u) { (void)u; return link_peer_count(); }
+static int prod_local_slot(void *u) { (void)u; return link_local_slot(); }
 static uint32_t prod_now_us(void *u) { (void)u; return link_now_us(); }
 
 static int prod_send(void *u, uint8_t dest, uint8_t type,
@@ -250,7 +497,7 @@ static int prod_recv(void *u, link_msg *out)
 
 static const sio_link_ops prod_ops =
 {
-  prod_connected, prod_peer_count, prod_send, prod_recv, prod_now_us, NULL
+  prod_connected, prod_peer_count, prod_local_slot, prod_send, prod_recv, prod_now_us, NULL
 };
 
 int sio_link_enable(LINK_ROLE role)
@@ -285,6 +532,14 @@ int sio_link_start(uint16_t value, int is32)
     return 0;
 
   return sio_link_ctx_start(&sio_ctx, value, is32);
+}
+
+int sio_link_mp_control(uint16_t *value)
+{
+  if (!sio_link_enabled)
+    return 0;
+
+  return sio_link_ctx_mp_control(&sio_ctx, value);
 }
 
 uint16_t sio_link_poll(void)

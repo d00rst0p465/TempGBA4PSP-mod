@@ -40,12 +40,18 @@
 /* How long a master waits for the slave before giving up and reading 1s. */
 #define SIO_LINK_TIMEOUT_US (250 * 1000)
 
+/* Multiplayer: how long the master waits for all slave replies, and how long a
+ * slave stays "busy" without a result before giving up. */
+#define SIO_MP_TIMEOUT_US   (50 * 1000)
+#define SIO_MP_SLAVE_TIMEOUT_US (250 * 1000)
+
 /* Transport used by the state machine. link_* wrappers are provided for
  * production; tests supply their own. */
 typedef struct
 {
   int      (*connected)(void *user);
   int      (*peer_count)(void *user);
+  int      (*local_slot)(void *user);   /* 0..3, or LINK_SLOT_NONE */
   int      (*send)(void *user, uint8_t dest_slot, uint8_t type,
                    const void *data, uint8_t len);
   int      (*recv)(void *user, link_msg *out);
@@ -65,6 +71,19 @@ typedef struct
   uint32_t             pending_deadline_us;
 
   uint16_t             next_seq;
+
+  /* multiplayer master transfer in flight */
+  int                  mp_pending;
+  uint16_t             mp_seq;
+  uint8_t              mp_expected;     /* bitmask of slave slots we wait for */
+  uint8_t              mp_got;
+  uint16_t             mp_words[4];
+  uint32_t             mp_deadline_us;
+  uint16_t             mp_next_seq;
+
+  /* multiplayer slave: busy between request and result */
+  int                  mp_slave_busy;
+  uint32_t             mp_slave_deadline_us;
 } sio_link_ctx;
 
 /* ---- core (host-testable) ---- */
@@ -77,6 +96,13 @@ void     sio_link_ctx_reset(sio_link_ctx *c);
  * then keep the start/busy bit set and must NOT fake a completion), or 0 to
  * fall back to the original instant-completion behaviour. */
 int      sio_link_ctx_start(sio_link_ctx *c, uint16_t value, int is32);
+
+/* Multiplayer mode (SIOCNT bits 12-13 = 10). Called from the SIOCNT write
+ * handler with the value being written; adjusts *value (read-only status bits
+ * SD/SI/ID, busy bit) and, on the master (player slot 0) with the start bit
+ * set, starts an exchange of the four SIOMLT words. Returns 1 if the link
+ * handled it, or 0 to use the original stub (link off / no partner). */
+int      sio_link_ctx_mp_control(sio_link_ctx *c, uint16_t *value);
 
 /* Pump the receive queue and time out a stalled transfer. Returns a mask of
  * IRQ bits to raise (SIO_IRQ_SERIAL or 0). Cheap when idle. */
@@ -93,6 +119,7 @@ void     sio_link_disable(void);            /* hook down + link_stop    */
 void     sio_link_reset(void);              /* emulator reset: drop pending */
 
 int      sio_link_start(uint16_t value, int is32);
+int      sio_link_mp_control(uint16_t *value);
 uint16_t sio_link_poll(void);
 
 #endif /* SIO_LINK_H */
