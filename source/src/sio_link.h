@@ -134,6 +134,7 @@ int      sio_link_start(uint16_t value, int is32);
  * 5 event marker. */
 void     sio_trace(int kind, uint32_t addr, uint32_t val, uint32_t pc);
 void     sio_trace_flush(const char *path);
+void     sio_link_trace_reads(int on);   /* memory.c: route SIO reads via C */
 /* Record every SIOCNT write (any mode) for the diagnostics line. */
 void     sio_link_note_write(uint16_t value, uint16_t rcnt);
 void     sio_link_debug_text(char *buf, int n, int line);   /* line 0..5 */

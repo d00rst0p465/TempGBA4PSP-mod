@@ -517,7 +517,10 @@ int sio_link_enable(LINK_ROLE role)
   r = link_start(role);
 
   if (r == 0)
+  {
+    sio_link_trace_reads(1);
     sio_link_enabled = 1;
+  }
 
   return r;
 }
@@ -529,6 +532,7 @@ void sio_link_disable(void)
     char path[512];
     snprintf(path, sizeof(path), "%slink_trace.txt", main_path);
     sio_link_enabled = 0;                       /* hooks go quiet first */
+    sio_link_trace_reads(0);
     sio_trace_flush(path);
   }
   link_stop();
@@ -616,6 +620,13 @@ void sio_trace(int kind, uint32_t addr, uint32_t val, uint32_t pc)
 
   if (!sio_link_enabled)
     return;
+
+  if (sio_trace_n > 0)
+  {
+    e = &sio_trace_buf[(sio_trace_n - 1) % SIO_TRACE_MAX];
+    if (e->kind == kind && e->addr == (addr & 0x3FF) && e->val == val && e->pc == pc)
+      return;                                   /* collapse polling loops */
+  }
 
   e = &sio_trace_buf[sio_trace_n % SIO_TRACE_MAX];
   sio_trace_n++;
