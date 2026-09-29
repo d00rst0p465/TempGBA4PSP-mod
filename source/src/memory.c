@@ -686,8 +686,7 @@ static u32 read32_iwram(u32 address)
 */
 
 #define SIO_TRACE_ADDR(a) (((((a) & 0x3FF) >= 0x120) && (((a) & 0x3FF) < 0x136)) || \
-                           ((((a) & 0x3FF) >= 0x10C) && (((a) & 0x3FF) < 0x110)) || \
-                           (((a) & 0x3FF) == 0x200))
+                           ((((a) & 0x3FF) >= 0x10C) && (((a) & 0x3FF) < 0x110)))
 
 static u32 read8_io_registers(u32 address)
 {
