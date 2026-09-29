@@ -688,30 +688,8 @@ static u32 read32_iwram(u32 address)
 #define SIO_TRACE_ADDR(a) (((((a) & 0x3FF) >= 0x120) && (((a) & 0x3FF) < 0x136)) || \
                            ((((a) & 0x3FF) >= 0x10C) && (((a) & 0x3FF) < 0x110)))
 
-// Serial registers whose reads are forced through the C path while the link is
-// on (io_readable cleared) so they can be traced; C returns the raw value.
-#define SIO_READ_RAW(a) (((((a) & 0x3FF) >= 0x120) && (((a) & 0x3FF) < 0x12C)) || \
-                         ((((a) & 0x3FF) >= 0x134) && (((a) & 0x3FF) < 0x136)))
-
-void sio_link_trace_reads(int on)
-{
-  u32 i;
-
-  for (i = 0x120; i < 0x12C; i++)
-    io_readable[i] = on ? 0 : 1;
-  for (i = 0x134; i < 0x136; i++)
-    io_readable[i] = on ? 0 : 1;
-}
-
 static u32 read8_io_registers(u32 address)
 {
-  if (sio_link_enabled && SIO_READ_RAW(address))
-  {
-    u32 v = ADDRESS8(io_registers, address & 0x3FF);
-    sio_trace(0, address, v, reg[REG_PC]);
-    return v;
-  }
-
   if ((address & 0xFFFC) == 0x0800) // repeated each 64K
     return ADDRESS8(&iwram_control, address & 0x03);
 
@@ -723,13 +701,6 @@ static u32 read8_io_registers(u32 address)
 
 static u32 read16_io_registers(u32 address)
 {
-  if (sio_link_enabled && SIO_READ_RAW(address))
-  {
-    u32 v = ADDRESS16(io_registers, address & 0x3FE);
-    sio_trace(1, address, v, reg[REG_PC]);
-    return v;
-  }
-
   if ((address & 0x3FE) == 0x128)
     sio_dbg_siocnt_reads++;
 
@@ -749,13 +720,6 @@ static u32 read16_io_registers(u32 address)
 
 static u32 read32_io_registers(u32 address)
 {
-  if (sio_link_enabled && SIO_READ_RAW(address))
-  {
-    u32 v = ADDRESS32(io_registers, address & 0x3FC);
-    sio_trace(2, address, v, reg[REG_PC]);
-    return v;
-  }
-
   if ((address & 0xFFFC) == 0x0800)
     return iwram_control;
 

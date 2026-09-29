@@ -449,7 +449,7 @@ static void test_mp_two_player_exchange(void)
 
   mp_enter(&a, MP_IRQ);
   mp_enter(&b, MP_IRQ);
-  CHECK((a.io[SIO_REG_SIOCNT] & 0x3C) == 0x04, "master SD, SI=0, ID0: %04x", a.io[SIO_REG_SIOCNT]);
+  CHECK((a.io[SIO_REG_SIOCNT] & 0x3C) == 0x08, "master SD, SI=0, ID0: %04x", a.io[SIO_REG_SIOCNT]);
   CHECK((b.io[SIO_REG_SIOCNT] & 0x3C) == 0x1C, "slave SD|SI, ID1: %04x", b.io[SIO_REG_SIOCNT]);
 
   a.io[SIO_REG_DATA8] = 0x1111;

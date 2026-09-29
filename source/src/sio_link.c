@@ -216,11 +216,11 @@ static int in_mp_mode(const sio_link_ctx *c)
          (c->io[SIO_REG_SIOCNT] & SIOCNT_MODE_MASK) == SIOCNT_MODE_MULTI;
 }
 
-/* Read-only bits: SD (bit2) = all units ready, SI (bit3) = 1 on slaves,
- * ID (bits 4-5) = player number. */
+/* Read-only bits (GBATEK): bit2 = SI terminal (1 on slaves, 0 on the master),
+ * bit3 = SD terminal (1 = all units ready), bits 4-5 = player ID. */
 static uint16_t mp_status_bits(int slot)
 {
-  return (uint16_t)(0x0004 | (slot != 0 ? 0x0008 : 0) | ((slot & 3) << 4));
+  return (uint16_t)(0x0008 | (slot != 0 ? 0x0004 : 0) | ((slot & 3) << 4));
 }
 
 static void mp_put_words(uint8_t *p, const uint16_t *w)
@@ -517,10 +517,7 @@ int sio_link_enable(LINK_ROLE role)
   r = link_start(role);
 
   if (r == 0)
-  {
-    sio_link_trace_reads(1);
     sio_link_enabled = 1;
-  }
 
   return r;
 }
@@ -532,7 +529,6 @@ void sio_link_disable(void)
     char path[512];
     snprintf(path, sizeof(path), "%slink_trace.txt", main_path);
     sio_link_enabled = 0;                       /* hooks go quiet first */
-    sio_link_trace_reads(0);
     sio_trace_flush(path);
   }
   link_stop();
