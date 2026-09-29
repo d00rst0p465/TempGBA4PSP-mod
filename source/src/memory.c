@@ -698,6 +698,9 @@ static u32 read8_io_registers(u32 address)
 
 static u32 read16_io_registers(u32 address)
 {
+  if ((address & 0x3FE) == 0x128)
+    sio_dbg_siocnt_reads++;
+
   if ((address & 0xFFFC) == 0x0800)
     return ADDRESS16(&iwram_control, address & 0x02);
 

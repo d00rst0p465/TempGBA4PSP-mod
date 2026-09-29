@@ -2873,7 +2873,7 @@ static u32 num_all_menus = 0;
 static char link_status_line[LINK_MENU_STATUS_CHARS];
 static char link_slot_line[LINK_MENU_STATUS_CHARS];
 static char link_stats_line[LINK_MENU_STATUS_CHARS];
-static char link_dbg_line[3][LINK_MENU_STATUS_CHARS];
+static char link_dbg_line[5][LINK_MENU_STATUS_CHARS];
 
 static void menu_link_host(void)
 {
@@ -2965,7 +2965,9 @@ static void menu_link_refresh_status(void)
 
     sio_link_debug_text(link_dbg_line[0], LINK_MENU_STATUS_CHARS, 0);
     sio_link_debug_text(link_dbg_line[1], LINK_MENU_STATUS_CHARS, 1);
-    sio_link_debug_text(link_dbg_line[2], LINK_MENU_STATUS_CHARS, 2);
+    sio_link_debug_text(link_dbg_line[2], LINK_MENU_STATUS_CHARS, 5);
+    sio_link_debug_text(link_dbg_line[3], LINK_MENU_STATUS_CHARS, 3);
+    sio_link_debug_text(link_dbg_line[4], LINK_MENU_STATUS_CHARS, 4);
   }
 }
 
@@ -3863,6 +3865,8 @@ u32 menu(void)
       print_string(link_dbg_line[0], MENU_LIST_POS_X, (7 * FONTHEIGHT) + 28, color_inactive_item, BG_NO_FILL);
       print_string(link_dbg_line[1], MENU_LIST_POS_X, (8 * FONTHEIGHT) + 28, color_inactive_item, BG_NO_FILL);
       print_string(link_dbg_line[2], MENU_LIST_POS_X, (9 * FONTHEIGHT) + 28, color_inactive_item, BG_NO_FILL);
+      print_string(link_dbg_line[3], MENU_LIST_POS_X, (10 * FONTHEIGHT) + 28, color_inactive_item, BG_NO_FILL);
+      print_string(link_dbg_line[4], MENU_LIST_POS_X, (11 * FONTHEIGHT) + 28, color_inactive_item, BG_NO_FILL);
     }
   }
 

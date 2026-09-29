@@ -90,6 +90,7 @@ typedef struct
   uint32_t             dbg_mp_start, dbg_mp_done, dbg_mp_timeout;
   uint32_t             dbg_slave_req, dbg_slave_res, dbg_slave_nak;
   uint16_t             dbg_last_siocnt, dbg_last_rcnt;
+  uint16_t             dbg_hist[6];
 } sio_link_ctx;
 
 /* ---- core (host-testable) ---- */
@@ -119,6 +120,7 @@ uint16_t sio_link_ctx_poll(sio_link_ctx *c);
 /* Non-zero while the link is enabled; checked in the scanline loop so the
  * link-off cost is one load and one branch. */
 extern volatile int sio_link_enabled;
+extern volatile unsigned sio_dbg_siocnt_reads;
 
 int      sio_link_enable(LINK_ROLE role);   /* link_start + hook up SIO */
 void     sio_link_disable(void);            /* hook down + link_stop    */
@@ -127,7 +129,7 @@ void     sio_link_reset(void);              /* emulator reset: drop pending */
 int      sio_link_start(uint16_t value, int is32);
 /* Record every SIOCNT write (any mode) for the diagnostics line. */
 void     sio_link_note_write(uint16_t value, uint16_t rcnt);
-void     sio_link_debug_text(char *buf, int n, int line);   /* line 0..2 */
+void     sio_link_debug_text(char *buf, int n, int line);   /* line 0..5 */
 int      sio_link_mp_control(uint16_t *value);
 uint16_t sio_link_poll(void);
 

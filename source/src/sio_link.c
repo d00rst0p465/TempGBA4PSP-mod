@@ -481,6 +481,7 @@ uint16_t sio_link_ctx_poll(sio_link_ctx *c)
 #include "memory.h"
 
 volatile int sio_link_enabled = 0;
+volatile unsigned sio_dbg_siocnt_reads = 0;
 
 static sio_link_ctx sio_ctx;
 
@@ -546,6 +547,12 @@ void sio_link_note_write(uint16_t value, uint16_t rcnt)
   if (!sio_link_enabled)
     return;
 
+  {
+    int i;
+    for (i = 5; i > 0; i--)
+      sio_ctx.dbg_hist[i] = sio_ctx.dbg_hist[i - 1];
+    sio_ctx.dbg_hist[0] = value;
+  }
   sio_ctx.dbg_last_siocnt = value;
   sio_ctx.dbg_last_rcnt   = rcnt;
 
@@ -571,6 +578,15 @@ void sio_link_debug_text(char *buf, int n, int line)
     case 1:
       snprintf(buf, n, "wr n%u m%u o%u", (unsigned)c->dbg_wr_normal,
                (unsigned)c->dbg_wr_multi, (unsigned)c->dbg_wr_other);
+      break;
+    case 3:
+      snprintf(buf, n, "%04X %04X %04X %04X %04X %04X",
+               c->dbg_hist[0], c->dbg_hist[1], c->dbg_hist[2],
+               c->dbg_hist[3], c->dbg_hist[4], c->dbg_hist[5]);
+      break;
+    case 4:
+      snprintf(buf, n, "IE %04X IME %X TM3 %04X rd %u", c->io[0x200 / 2],
+               c->io[0x208 / 2], c->io[0x10E / 2], sio_dbg_siocnt_reads);
       break;
     default:
       snprintf(buf, n, "M s%u d%u t%u S q%u r%u x%u",
