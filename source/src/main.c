@@ -21,6 +21,7 @@
 
 #include "common.h"
 #include "power_lifecycle.h"
+#include "sio_link.h"
 
 static PowerLifecycle psp_power_lifecycle;
 static u32 sleep_reopen_gamepak = 0;
@@ -396,6 +397,15 @@ u32 update_gba(void)
         // Transition from hblank to next line
         video_count += 960;
         dispstat &= ~0x02;
+
+        // Link cable: finish/answer serial transfers once per scanline
+        // (~73us), far finer than the ~3ms Wi-Fi round trip. One load and
+        // one branch when the link is off.
+        if (sio_link_enabled != 0)
+        {
+          if (sio_link_poll() != 0)
+            irq_raised |= IRQ_SERIAL;
+        }
 
         vcount++;
 
@@ -1014,6 +1024,7 @@ void quit(void)
   update_backup_immediately();
   save_config_file();
 
+  sio_link_disable();
   sound_term();
   memory_term();
   video_term();
@@ -1034,6 +1045,7 @@ void reset_gba(void)
   init_memory();
   init_main();
   reset_sound();
+  sio_link_reset();
 }
 
 

@@ -19,6 +19,7 @@
  */
 
 #include "common.h"
+#include "sio_link.h"
 
 /* Popup depth frame — declared in psp_video.h, defined in psp_video.c */
 extern void draw_popup_frame_auto(int x, int y, int w, int h);
@@ -1119,12 +1120,18 @@ static CPU_ALERT_TYPE sio_control(u32 value)
     case NORMAL32:
       if ((value & 0x80) != 0)
       {
-        value &= 0xFF7F;
-
-        if ((value & 0x4001) == 0x4001)
+        // With a live link the partner completes the transfer: keep the
+        // start/busy bit set and let sio_link_poll() finish it. Otherwise
+        // (link off / no partner) fake an instant completion as before.
+        if (sio_link_start((u16)value, mode == NORMAL32) == 0)
         {
-          pIO_REG(REG_IF) |= IRQ_SERIAL;
-          alert = CPU_ALERT_IRQ;
+          value &= 0xFF7F;
+
+          if ((value & 0x4001) == 0x4001)
+          {
+            pIO_REG(REG_IF) |= IRQ_SERIAL;
+            alert = CPU_ALERT_IRQ;
+          }
         }
       }
       break;

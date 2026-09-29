@@ -107,6 +107,9 @@ int        link_peer_count(void);        /* remote peers currently seen (0..3) *
 int        link_local_slot(void);        /* our player slot 0..3, or LINK_SLOT_NONE */
 void       link_get_stats(link_stats *out);
 
+/* Microsecond timestamp on the same clock as link_msg.rx_time_us (wraps). */
+uint32_t   link_now_us(void);
+
 /* ---- data path (non-blocking) ---- */
 
 /* Send a message to one slot (0..3) or LINK_SLOT_BROADCAST. Returns 0 if the

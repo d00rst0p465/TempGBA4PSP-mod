@@ -741,3 +741,8 @@ void link_get_stats(link_stats *out)
 {
   *out = g_stats;
 }
+
+uint32_t link_now_us(void)
+{
+  return sceKernelGetSystemTimeLow();
+}
