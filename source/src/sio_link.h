@@ -42,8 +42,8 @@
 
 /* Multiplayer: how long the master waits for all slave replies, and how long a
  * slave stays "busy" without a result before giving up. */
-#define SIO_MP_TIMEOUT_US   (50 * 1000)
-#define SIO_MP_SLAVE_TIMEOUT_US (250 * 1000)
+#define SIO_MP_TIMEOUT_US   (200 * 1000)
+#define SIO_MP_SLAVE_TIMEOUT_US (400 * 1000)
 
 /* Transport used by the state machine. link_* wrappers are provided for
  * production; tests supply their own. */
@@ -91,6 +91,8 @@ typedef struct
   uint32_t             dbg_slave_req, dbg_slave_res, dbg_slave_nak;
   uint16_t             dbg_last_siocnt, dbg_last_rcnt;
   uint16_t             dbg_hist[6];
+  uint32_t             dbg_rsp_ok, dbg_rsp_idle, dbg_rsp_seq, dbg_rsp_src;
+  uint32_t             dbg_mp_start_us, dbg_lat_last, dbg_lat_max, dbg_lat_sum, dbg_late_last;
 } sio_link_ctx;
 
 /* ---- core (host-testable) ---- */

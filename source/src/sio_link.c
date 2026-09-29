@@ -310,7 +310,8 @@ int sio_link_ctx_mp_control(sio_link_ctx *c, uint16_t *value)
       c->mp_seq         = c->mp_next_seq++;
       c->mp_pending     = 1;
       c->dbg_mp_start++;
-      c->mp_deadline_us = o->now_us(o->user) + SIO_MP_TIMEOUT_US;
+      c->dbg_mp_start_us = o->now_us(o->user);
+      c->mp_deadline_us = c->dbg_mp_start_us + SIO_MP_TIMEOUT_US;
     }
     busy = c->mp_pending;
   }
@@ -370,8 +371,24 @@ static uint16_t mp_handle_response(sio_link_ctx *c, const link_msg *m)
   int src = m->src_slot;
   uint16_t seq = (uint16_t)(m->data[2] | (m->data[3] << 8));
 
-  if (!c->mp_pending || seq != c->mp_seq || src < 1 || src > 3)
+  if (!c->mp_pending)
+  {
+    c->dbg_rsp_idle++;
+    /* how long after the transfer started did this reply arrive? */
+    c->dbg_late_last = c->ops->now_us(c->ops->user) - c->dbg_mp_start_us;
     return 0;
+  }
+  if (seq != c->mp_seq) { c->dbg_rsp_seq++; return 0; }
+  if (src < 1 || src > 3) { c->dbg_rsp_src++; return 0; }
+
+  {
+    uint32_t lat = c->ops->now_us(c->ops->user) - c->dbg_mp_start_us;
+    c->dbg_rsp_ok++;
+    c->dbg_lat_last = lat;
+    c->dbg_lat_sum += lat;
+    if (lat > c->dbg_lat_max)
+      c->dbg_lat_max = lat;
+  }
 
   if (!(m->data[1] & SIO_FLAG_NAK))
     c->mp_words[src] = (uint16_t)(m->data[4] | (m->data[5] << 8));
@@ -586,13 +603,15 @@ void sio_link_debug_text(char *buf, int n, int line)
                (unsigned)c->dbg_wr_multi, (unsigned)c->dbg_wr_other);
       break;
     case 3:
-      snprintf(buf, n, "%04X %04X %04X %04X %04X %04X",
-               c->dbg_hist[0], c->dbg_hist[1], c->dbg_hist[2],
-               c->dbg_hist[3], c->dbg_hist[4], c->dbg_hist[5]);
+      snprintf(buf, n, "rsp ok%u idle%u seq%u src%u", (unsigned)c->dbg_rsp_ok,
+               (unsigned)c->dbg_rsp_idle, (unsigned)c->dbg_rsp_seq,
+               (unsigned)c->dbg_rsp_src);
       break;
     case 4:
-      snprintf(buf, n, "IE %04X IME %X TM3 %04X rd %u", c->io[0x200 / 2],
-               c->io[0x208 / 2], c->io[0x10E / 2], sio_dbg_siocnt_reads);
+      snprintf(buf, n, "ms: last %u max %u avg %u late %u",
+               (unsigned)(c->dbg_lat_last / 1000), (unsigned)(c->dbg_lat_max / 1000),
+               c->dbg_rsp_ok ? (unsigned)(c->dbg_lat_sum / c->dbg_rsp_ok / 1000) : 0u,
+               (unsigned)(c->dbg_late_last / 1000));
       break;
     default:
       snprintf(buf, n, "M s%u d%u t%u S q%u r%u x%u",
