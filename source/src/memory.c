@@ -1114,6 +1114,8 @@ static CPU_ALERT_TYPE sio_control(u32 value)
   SIO_MODE_TYPE mode = sio_mode(value, pIO_REG(REG_RCNT));
   CPU_ALERT_TYPE alert = CPU_ALERT_NONE;
 
+  sio_link_note_write((u16)value, pIO_REG(REG_RCNT));
+
   switch (mode)
   {
     case NORMAL8:

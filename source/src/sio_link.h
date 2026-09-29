@@ -84,6 +84,12 @@ typedef struct
   /* multiplayer slave: busy between request and result */
   int                  mp_slave_busy;
   uint32_t             mp_slave_deadline_us;
+
+  /* diagnostics (shown in the Link menu) */
+  uint32_t             dbg_wr_normal, dbg_wr_multi, dbg_wr_other;
+  uint32_t             dbg_mp_start, dbg_mp_done, dbg_mp_timeout;
+  uint32_t             dbg_slave_req, dbg_slave_res, dbg_slave_nak;
+  uint16_t             dbg_last_siocnt, dbg_last_rcnt;
 } sio_link_ctx;
 
 /* ---- core (host-testable) ---- */
@@ -119,6 +125,9 @@ void     sio_link_disable(void);            /* hook down + link_stop    */
 void     sio_link_reset(void);              /* emulator reset: drop pending */
 
 int      sio_link_start(uint16_t value, int is32);
+/* Record every SIOCNT write (any mode) for the diagnostics line. */
+void     sio_link_note_write(uint16_t value, uint16_t rcnt);
+void     sio_link_debug_text(char *buf, int n, int line);   /* line 0..2 */
 int      sio_link_mp_control(uint16_t *value);
 uint16_t sio_link_poll(void);
 

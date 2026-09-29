@@ -10,6 +10,7 @@
  */
 
 #include <string.h>
+#include <stdio.h>
 
 #include "sio_link.h"
 
@@ -259,6 +260,7 @@ static uint16_t mp_master_finish(sio_link_ctx *c)
   uint8_t payload[SIO_MP_PAYLOAD_LEN];
 
   c->mp_pending = 0;
+  c->dbg_mp_done++;
 
   payload[0] = SIO_KIND_MRES;
   payload[1] = 0;
@@ -307,6 +309,7 @@ int sio_link_ctx_mp_control(sio_link_ctx *c, uint16_t *value)
       c->mp_got         = 0;
       c->mp_seq         = c->mp_next_seq++;
       c->mp_pending     = 1;
+      c->dbg_mp_start++;
       c->mp_deadline_us = o->now_us(o->user) + SIO_MP_TIMEOUT_US;
     }
     busy = c->mp_pending;
@@ -340,6 +343,8 @@ static uint16_t mp_handle_request(sio_link_ctx *c, const link_msg *m)
   reply[2] = m->data[2];
   reply[3] = m->data[3];
 
+  c->dbg_slave_req++;
+
   if (in_mp_mode(c))
   {
     reply[4] = (uint8_t)(c->io[SIO_REG_DATA8]);
@@ -351,6 +356,7 @@ static uint16_t mp_handle_request(sio_link_ctx *c, const link_msg *m)
   else
   {
     reply[1] = SIO_FLAG_NAK;
+    c->dbg_slave_nak++;
   }
 
   dest = (m->src_slot == LINK_SLOT_NONE) ? (uint8_t)LINK_SLOT_BROADCAST
@@ -391,6 +397,7 @@ static uint16_t mp_handle_result(sio_link_ctx *c, const link_msg *m)
     w[i] = (uint16_t)(m->data[4 + i * 2] | (m->data[5 + i * 2] << 8));
 
   c->mp_slave_busy = 0;
+  c->dbg_slave_res++;
   mp_store_result(c, w, slot);
   return mp_irq(c);
 }
@@ -403,7 +410,7 @@ static uint16_t mp_tick(sio_link_ctx *c)
 
   if (c->mp_pending &&
       (int32_t)(o->now_us(o->user) - c->mp_deadline_us) >= 0)
-    irq |= mp_master_finish(c);                 /* missing slaves read 0xFFFF */
+    { c->dbg_mp_timeout++; irq |= mp_master_finish(c); }  /* missing slaves read 0xFFFF */
 
   if (c->mp_slave_busy &&
       (int32_t)(o->now_us(o->user) - c->mp_slave_deadline_us) >= 0)
@@ -532,6 +539,46 @@ int sio_link_start(uint16_t value, int is32)
     return 0;
 
   return sio_link_ctx_start(&sio_ctx, value, is32);
+}
+
+void sio_link_note_write(uint16_t value, uint16_t rcnt)
+{
+  if (!sio_link_enabled)
+    return;
+
+  sio_ctx.dbg_last_siocnt = value;
+  sio_ctx.dbg_last_rcnt   = rcnt;
+
+  if (rcnt & 0x8000)
+    sio_ctx.dbg_wr_other++;
+  else if ((value & 0x3000) == 0x2000)
+    sio_ctx.dbg_wr_multi++;
+  else if ((value & 0x3000) < 0x2000)
+    sio_ctx.dbg_wr_normal++;
+  else
+    sio_ctx.dbg_wr_other++;
+}
+
+void sio_link_debug_text(char *buf, int n, int line)
+{
+  const sio_link_ctx *c = &sio_ctx;
+
+  switch (line)
+  {
+    case 0:
+      snprintf(buf, n, "SIOCNT %04X RCNT %04X", c->dbg_last_siocnt, c->dbg_last_rcnt);
+      break;
+    case 1:
+      snprintf(buf, n, "wr n%u m%u o%u", (unsigned)c->dbg_wr_normal,
+               (unsigned)c->dbg_wr_multi, (unsigned)c->dbg_wr_other);
+      break;
+    default:
+      snprintf(buf, n, "M s%u d%u t%u S q%u r%u x%u",
+               (unsigned)c->dbg_mp_start, (unsigned)c->dbg_mp_done,
+               (unsigned)c->dbg_mp_timeout, (unsigned)c->dbg_slave_req,
+               (unsigned)c->dbg_slave_res, (unsigned)c->dbg_slave_nak);
+      break;
+  }
 }
 
 int sio_link_mp_control(uint16_t *value)

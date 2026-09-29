@@ -2873,6 +2873,7 @@ static u32 num_all_menus = 0;
 static char link_status_line[LINK_MENU_STATUS_CHARS];
 static char link_slot_line[LINK_MENU_STATUS_CHARS];
 static char link_stats_line[LINK_MENU_STATUS_CHARS];
+static char link_dbg_line[3][LINK_MENU_STATUS_CHARS];
 
 static void menu_link_host(void)
 {
@@ -2898,6 +2899,7 @@ static void menu_link_refresh_status(void)
 
   link_slot_line[0] = '\0';
   link_stats_line[0] = '\0';
+  link_dbg_line[0][0] = link_dbg_line[1][0] = link_dbg_line[2][0] = '\0';
 
   switch (state)
   {
@@ -2960,6 +2962,10 @@ static void menu_link_refresh_status(void)
     snprintf(link_stats_line, sizeof(link_stats_line), "tx %u  rx %u  drop %u",
              (unsigned)st.tx_packets, (unsigned)st.rx_packets,
              (unsigned)(st.rx_dropped_full + st.rx_dropped_bad));
+
+    sio_link_debug_text(link_dbg_line[0], LINK_MENU_STATUS_CHARS, 0);
+    sio_link_debug_text(link_dbg_line[1], LINK_MENU_STATUS_CHARS, 1);
+    sio_link_debug_text(link_dbg_line[2], LINK_MENU_STATUS_CHARS, 2);
   }
 }
 
@@ -3851,6 +3857,13 @@ u32 menu(void)
 
     if (link_stats_line[0] != '\0')
       print_string(link_stats_line, MENU_LIST_POS_X, (6 * FONTHEIGHT) + 28, color_inactive_item, BG_NO_FILL);
+
+    if (link_dbg_line[0][0] != '\0')
+    {
+      print_string(link_dbg_line[0], MENU_LIST_POS_X, (7 * FONTHEIGHT) + 28, color_inactive_item, BG_NO_FILL);
+      print_string(link_dbg_line[1], MENU_LIST_POS_X, (8 * FONTHEIGHT) + 28, color_inactive_item, BG_NO_FILL);
+      print_string(link_dbg_line[2], MENU_LIST_POS_X, (9 * FONTHEIGHT) + 28, color_inactive_item, BG_NO_FILL);
+    }
   }
 
 
