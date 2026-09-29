@@ -20,6 +20,7 @@
 
 #include "common.h"
 #include "boxart.h"   // carousel / boxart support
+#include "sio_link.h" // link cable (Host / Join / Disconnect)
 
 extern u32 option_swap_confirm_buttons;
 
@@ -2858,9 +2859,109 @@ static void reload_cheats_page(void)
 
 /* Global array of all menus — populated once inside menu(),
    then used by file-scope refresh to avoid nested functions. */
-#define MAX_MENUS 9
+#define MAX_MENUS 10
 static MenuType *all_menus[MAX_MENUS];
 static u32 num_all_menus = 0;
+
+/* ------------------------------------------------------------------
+   Link cable menu -- file scope (not nested) because these are used
+   as menu callbacks; see the trampoline note above.
+   Status text is plain English and refreshed every frame.
+   ------------------------------------------------------------------ */
+#define LINK_MENU_STATUS_CHARS 40
+
+static char link_status_line[LINK_MENU_STATUS_CHARS];
+static char link_slot_line[LINK_MENU_STATUS_CHARS];
+static char link_stats_line[LINK_MENU_STATUS_CHARS];
+
+static void menu_link_host(void)
+{
+  sio_link_enable(LINK_ROLE_HOST);
+}
+
+static void menu_link_join(void)
+{
+  sio_link_enable(LINK_ROLE_JOIN);
+}
+
+static void menu_link_disconnect(void)
+{
+  sio_link_disable();
+}
+
+static void menu_link_refresh_status(void)
+{
+  LINK_STATE state = link_get_state();
+  int peers = link_peer_count();
+  int slot  = link_local_slot();
+  link_stats st;
+
+  link_slot_line[0] = '\0';
+  link_stats_line[0] = '\0';
+
+  switch (state)
+  {
+    case LINK_STATE_OFF:
+      snprintf(link_status_line, sizeof(link_status_line), "Status: off");
+      break;
+
+    case LINK_STATE_STARTING:
+      snprintf(link_status_line, sizeof(link_status_line), "Status: starting Wi-Fi...");
+      break;
+
+    case LINK_STATE_CONNECTING:
+      snprintf(link_status_line, sizeof(link_status_line), "Status: joining group...");
+      break;
+
+    case LINK_STATE_CONNECTED:
+      if (peers == 0)
+        snprintf(link_status_line, sizeof(link_status_line), "Status: connected, no peer yet");
+      else
+        snprintf(link_status_line, sizeof(link_status_line),
+                 "Status: connected, %d peer%s", peers, (peers == 1) ? "" : "s");
+      break;
+
+    case LINK_STATE_ERROR:
+    default:
+      switch (link_get_error())
+      {
+        case LINK_ERR_WLAN_OFF:
+          snprintf(link_status_line, sizeof(link_status_line), "Error: turn the WLAN switch on");
+          break;
+        case LINK_ERR_MODULE_LOAD:
+          snprintf(link_status_line, sizeof(link_status_line), "Error: could not load net modules");
+          break;
+        case LINK_ERR_STACK_INIT:
+          snprintf(link_status_line, sizeof(link_status_line), "Error: Wi-Fi init failed");
+          break;
+        case LINK_ERR_CONNECT:
+          snprintf(link_status_line, sizeof(link_status_line), "Error: connection failed or lost");
+          break;
+        case LINK_ERR_SOCKET:
+          snprintf(link_status_line, sizeof(link_status_line), "Error: could not open socket");
+          break;
+        case LINK_ERR_THREAD:
+          snprintf(link_status_line, sizeof(link_status_line), "Error: could not start link thread");
+          break;
+        default:
+          snprintf(link_status_line, sizeof(link_status_line), "Error");
+          break;
+      }
+      break;
+  }
+
+  if (state == LINK_STATE_CONNECTED)
+  {
+    if (slot >= 0)
+      snprintf(link_slot_line, sizeof(link_slot_line), "You are player %d%s",
+               slot + 1, (slot == 0) ? " (host)" : "");
+
+    link_get_stats(&st);
+    snprintf(link_stats_line, sizeof(link_stats_line), "tx %u  rx %u  drop %u",
+             (unsigned)st.tx_packets, (unsigned)st.rx_packets,
+             (unsigned)(st.rx_dropped_full + st.rx_dropped_bad));
+  }
+}
 
 static void print_menu_line(const char *str, s16 x, s16 y, u16 fg, s16 bg)
 {
@@ -3737,6 +3838,21 @@ u32 menu(void)
     DRAW_TITLE_OPT_GBK(MSG_MAIN_MENU_3);
   }
 
+  void submenu_link(void)
+  {
+    DRAW_TITLE_OPT_GBK(MSG_LINK_MENU_TITLE);
+
+    menu_link_refresh_status();
+
+    print_string(link_status_line, MENU_LIST_POS_X, (4 * FONTHEIGHT) + 28, color_active_item, BG_NO_FILL);
+
+    if (link_slot_line[0] != '\0')
+      print_string(link_slot_line, MENU_LIST_POS_X, (5 * FONTHEIGHT) + 28, color_inactive_item, BG_NO_FILL);
+
+    if (link_stats_line[0] != '\0')
+      print_string(link_stats_line, MENU_LIST_POS_X, (6 * FONTHEIGHT) + 28, color_inactive_item, BG_NO_FILL);
+  }
+
 
   void submenu_cheats_misc(void)
   {
@@ -4277,6 +4393,15 @@ u32 menu(void)
 
   MAKE_MENU(analog_config, NULL, NULL);
 
+  MenuOptionType link_options[] =
+  {
+    ACTION_OPTION(menu_link_host,       NULL, MSG[MSG_LINK_HOST],       MSG_LINK_HELP_HOST,       0, MSG_LINK_HOST),
+    ACTION_OPTION(menu_link_join,       NULL, MSG[MSG_LINK_JOIN],       MSG_LINK_HELP_JOIN,       1, MSG_LINK_JOIN),
+    ACTION_OPTION(menu_link_disconnect, NULL, MSG[MSG_LINK_DISCONNECT], MSG_LINK_HELP_DISCONNECT, 2, MSG_LINK_DISCONNECT)
+  };
+
+  MAKE_MENU(link, NULL, NULL);
+
   MenuOptionType main_options[] =
   {
     NUMERIC_SELECTION_ACTION_OPTION(NULL, NULL, MSG[MSG_MAIN_MENU_0], &savestate_slot, 10, MSG_MAIN_MENU_HELP_0, 0, MSG_MAIN_MENU_0),
@@ -4290,6 +4415,7 @@ u32 menu(void)
     SUBMENU_OPTION(&theme_menu, MSG[MSG_MAIN_MENU_EMULATOR], MSG_MAIN_MENU_HELP_EMULATOR, 8, MSG_MAIN_MENU_EMULATOR),
     ACTION_OPTION(menu_show_game_txt_debug, NULL, MSG[MSG_MAIN_MENU_GAMECONFIG], MSG_MAIN_MENU_HELP_GAMECONFIG, 9, MSG_MAIN_MENU_GAMECONFIG),
     SUBMENU_OPTION(&cheats_misc_menu, MSG[MSG_MAIN_MENU_CHEAT], MSG_MAIN_MENU_HELP_CHEAT, 10, MSG_MAIN_MENU_CHEAT),
+    SUBMENU_OPTION(&link_menu, MSG[MSG_MAIN_MENU_LINK], MSG_MAIN_MENU_HELP_LINK, 11, MSG_MAIN_MENU_LINK),
 
     ACTION_OPTION(NULL, NULL, MSG[MSG_MAIN_MENU_7], MSG_MAIN_MENU_HELP_7, 12, MSG_MAIN_MENU_7),
     ACTION_OPTION(NULL, NULL, MSG[MSG_MAIN_MENU_8], MSG_MAIN_MENU_HELP_8, 13, MSG_MAIN_MENU_8),
@@ -4313,6 +4439,7 @@ u32 menu(void)
   all_menus[6] = &custom_colors_menu;
   all_menus[7] = &savestate_menu;
   all_menus[8] = &cheats_misc_menu;
+  all_menus[9] = &link_menu;
   num_all_menus = MAX_MENUS;
 
   menu_refresh_language();
@@ -4434,6 +4561,8 @@ u32 menu(void)
       submenu_analog();
     if (current_menu == &cheats_misc_menu)
       submenu_cheats_misc();
+    if (current_menu == &link_menu)
+      submenu_link();
     if (current_menu == &main_menu)
       submenu_main();
 

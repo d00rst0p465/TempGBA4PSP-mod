@@ -871,4 +871,31 @@
   // MSG_BROWSER_ALL_GAMES
   "--- All Games ---",
 
+  // MSG_MAIN_MENU_LINK
+  "Link cable",
+
+  // MSG_MAIN_MENU_HELP_LINK
+  "Play link cable games with another PSP",
+
+  // MSG_LINK_MENU_TITLE
+  "Link cable",
+
+  // MSG_LINK_HOST
+  "Host (player 1)",
+
+  // MSG_LINK_JOIN
+  "Join (player 2)",
+
+  // MSG_LINK_DISCONNECT
+  "Disconnect",
+
+  // MSG_LINK_HELP_HOST
+  "Start a session; other PSP chooses Join",
+
+  // MSG_LINK_HELP_JOIN
+  "Join a session started on another PSP",
+
+  // MSG_LINK_HELP_DISCONNECT
+  "Turn the link off and free the Wi-Fi",
+
 },
